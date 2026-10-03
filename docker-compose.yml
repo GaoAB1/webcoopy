@@ -1,19 +1,29 @@
 # ── webcopy docker-compose ────────────────────────────────────────────────────
 # Profiles:
-#   (default / web)  — start the Web UI on http://localhost:3000
+#   web   (default)  — start the Web UI on http://localhost:3000
 #   cli              — single-shot CLI: pass URLs as command args
 #   dev              — local dev with source-code volume mount (live reload)
 #
+# These services run the PUBLISHED image (ghcr.io/gaoab1/webcopy) and do NOT
+# declare `build:`. Declaring both `build:` and `image:` lets Docker reuse a
+# stale locally built image and silently ignore the one you just pulled, which
+# makes "I updated but nothing changed" bugs very hard to see. Use the `dev`
+# profile (or docker build directly) when you want to run local sources.
+#
+# Updating:
+#   docker compose pull
+#   docker compose --profile web up -d --force-recreate
+#   docker compose --profile cli run --rm cli --doctor   # verify the build
+#
 # Examples:
-#   docker compose up                          # Web UI → http://localhost:3000
-#   docker compose --profile cli run --rm webcopy https://example.com/article
-#   docker compose --profile dev up            # Dev mode with hot-reload
-#   docker compose down                        # stop everything
+#   docker compose --profile web up -d                    # Web UI → :3000
+#   docker compose --profile cli run --rm cli https://example.com/article
+#   docker compose --profile dev up                       # Dev mode, hot reload
+#   docker compose down                                   # stop everything
 
 services:
   # ── Web UI server ───────────────────────────────────────────────────────────
   web:
-    build: .
     image: ghcr.io/gaoab1/webcopy:latest
     profiles: ["web"]
     ports:
@@ -35,14 +45,13 @@ services:
       start_period: 10s
 
   # ── CLI one-shot ──────────────────────────────────────────────────────────────
+  # NOTE: the service is named `cli` — pass it as the target, not "webcopy":
+  #   docker compose --profile cli run --rm cli <url>
   cli:
-    build: .
     image: ghcr.io/gaoab1/webcopy:latest
     profiles: ["cli"]
     volumes:
       - webcopy-output:/app/output
-    # Override command at invocation time:
-    #   docker compose --profile cli run --rm webcopy --out /app/output https://example.com/article
     command: ["--help"]
     restart: "no"
 

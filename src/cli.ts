@@ -1,6 +1,6 @@
 import { Command } from 'commander';
-import { readFile } from 'node:fs/promises';
-import { processMany, defaultAdapters, type PipelineOptions } from './pipeline.js';
+import { readFile, rm } from 'node:fs/promises';
+import { processMany, processUrl, defaultAdapters, type PipelineOptions } from './pipeline.js';
 import { startServer, type WebServerOptions } from './web.js';
 
 /** Kept in sync with package.json — surfaced by `--version` and `--doctor`. */
@@ -43,6 +43,11 @@ export function buildCli(deps: CliDeps = {}): Command {
     .action(async (urls: string[], opts) => {
       if (opts.doctor) {
         printDoctor();
+        // With URLs supplied, also probe the live fetch path so a single
+        // command can distinguish "stale build" from "site changed".
+        if (urls.length > 0) {
+          await probeUrls(urls, opts);
+        }
         return;
       }
       if (opts.web) {
@@ -137,12 +142,13 @@ function printDoctor(): void {
   console.log('');
   console.log('If "juejin" above does not say "ssr-payload+dom", the running build');
   console.log('predates the Nuxt SSR payload support — pull the image again.');
+  console.log('');
+  console.log('Tip: `webcopy --doctor <url>` also fetches the URL and reports which');
+  console.log('adapter matched and how large the extracted body was.');
 }
 
 /** Report which extraction paths an adapter supports. */
 function adapterCapabilities(adapter: { name: string; extract: unknown }): string {
-  // Probe the adapter with an SPA-shaped shell carrying a payload. Builds
-  // without payload support return nothing usable for it.
   const probe =
     '<html><head><title>probe</title></head><body>' +
     '<script>window.__NUXT__=(function(a){return {article:{article_info:{mark_content:"probe-body"}}};})(0);</script>' +
@@ -157,6 +163,54 @@ function adapterCapabilities(adapter: { name: string; extract: unknown }): strin
   } catch {
     return 'n/a';
   }
+}
+
+/**
+ * Fetch each URL and report what the pipeline actually produced, without
+ * writing anything to disk. Used by `--doctor <url>` to tell "the build is
+ * stale" apart from "the site changed its markup".
+ */
+async function probeUrls(
+  urls: string[],
+  opts: { timeout?: number; retries?: number }
+): Promise<void> {
+  const registry = defaultAdapters();
+  console.log('');
+  console.log('live probe:');
+
+  for (const url of urls) {
+    const matched = registry.findFor(url);
+    const adapter = matched[0]?.name ?? '(none — Readability fallback)';
+    console.log(`  ${url}`);
+    console.log(`    adapter: ${adapter}`);
+
+    try {
+      const result = await processUrl(url, {
+        outDir: './.webcopy-probe',
+        overwrite: true,
+        verbose: false,
+        fetch: { timeoutMs: opts.timeout, retries: opts.retries }
+      });
+
+      if (!result.ok) {
+        console.log(`    RESULT: FAILED [${result.errorCode ?? 'unknown'}] ${result.error ?? ''}\n`);
+        continue;
+      }
+
+      const body = result.path ? await readFile(result.path, 'utf-8').catch(() => '') : '';
+      const placeholder = /^\s*(please\s*wait|loading)\s*\.{0,3}\s*$/im.test(body);
+      console.log(`    title:  ${result.title ?? '(none)'}`);
+      console.log(`    body:   ${body.length} chars${placeholder ? '  ← LOOKS LIKE A PLACEHOLDER PAGE' : ''}`);
+      console.log(`    RESULT: ${placeholder ? 'SUSPECT' : 'ok'}\n`);
+
+      // Probe output is throwaway — do not leave it behind.
+      if (result.path) await rm(result.path, { force: true }).catch(() => {});
+    } catch (err) {
+      console.log(`    RESULT: error ${err instanceof Error ? err.message : String(err)}\n`);
+    }
+  }
+
+  await rm('./.webcopy-probe', { recursive: true, force: true }).catch(() => {});
 }
 
 function errorHint(code?: string): string {

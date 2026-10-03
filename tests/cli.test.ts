@@ -116,4 +116,58 @@ describe('cli --doctor', () => {
 
     logSpy.mockRestore();
   });
+
+  /**
+   * `--doctor <url>` must not fall through into the normal pipeline branch —
+   * that path would write files to the user's `--out` dir and print
+   * "wrote ... → ..." lines instead of probe output. Regression guard for the
+   * action() ordering: the doctor branch has to win before any pipeline work.
+   */
+  it('does not run the pipeline for --doctor with a URL', async () => {
+    const runPipeline = vi.fn(async (_urls: string[], _options: unknown) => []);
+    const startWebServer = vi.fn(async (_options: WebServerOptions) => ({
+      port: 3000,
+      close: async () => {}
+    }));
+    const program = buildCli({
+      runPipeline: runPipeline as never,
+      startWebServer: startWebServer as never
+    });
+    program.exitOverride();
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    // An unroutable URL keeps the probe from reaching the network quickly:
+    // 127.0.0.1:1 refuses the connection immediately.
+    await program.parseAsync([
+      'node', 'webcopy', '--doctor', 'http://127.0.0.1:1/article', '--timeout', '200', '--retries', '1'
+    ]);
+
+    const output = logSpy.mock.calls.flat().join('\n');
+    expect(runPipeline).not.toHaveBeenCalled();
+    expect(startWebServer).not.toHaveBeenCalled();
+    expect(output).toContain('live probe:');
+    // The probe reports a result line for the URL rather than a "wrote" line.
+    expect(output).toMatch(/RESULT: (FAILED|error)/);
+    expect(output).not.toContain('wrote  ');
+
+    logSpy.mockRestore();
+    errSpy.mockRestore();
+  });
+
+  it('probe text mentions the URL and the matched adapter', async () => {
+    const program = buildCli();
+    program.exitOverride();
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    await program.parseAsync([
+      'node', 'webcopy', '--doctor', 'http://127.0.0.1:1/juejin-post', '--timeout', '200', '--retries', '1'
+    ]);
+
+    const output = logSpy.mock.calls.flat().join('\n');
+    expect(output).toContain('live probe:');
+    expect(output).toContain('adapter:');
+
+    logSpy.mockRestore();
+  });
 });
