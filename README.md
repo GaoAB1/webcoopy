@@ -49,13 +49,17 @@ docker run --rm -v "$PWD/output:/app/output" webcopy \
 
 The image is multi-stage (Node 20 build → `node:20-alpine` runtime) and ships
 with `ca-certificates` + `dumb-init` for clean SIGTERM handling. Default entry
-is `node /app/dist/index.js`, so all CLI flags pass through unchanged.
+is `node /app/dist/index.js --web --host 0.0.0.0 --port 3000`, so a bare
+`docker run -p 3000:3000 <image>` starts the Web UI; append CLI flags to
+override (e.g. `docker run --rm <image> https://example.com/article`).
 
 ### docker-compose
 
 ```bash
 # Web UI → http://localhost:3000
-docker compose up
+# NOTE: the `web` service lives under the `web` profile, so the profile flag
+# is required — a bare `docker compose up` selects no service.
+docker compose --profile web up -d
 
 # CLI one-shot (URLs passed at run time)
 docker compose --profile cli run --rm webcopy https://example.com/article
@@ -69,12 +73,17 @@ docker compose --profile cli run --rm webcopy \
 docker compose --profile dev up
 ```
 
-Custom port via environment variable:
+Custom port via environment variable (applies to the host-side mapping only):
 
 ```bash
-WEB_PORT=8080 docker compose up       # Web UI on port 8080
+WEB_PORT=8080 docker compose --profile web up -d   # Web UI on port 8080
 DEV_PORT=3001 docker compose --profile dev up
 ```
+
+> **Port already allocated?** `Bind for :::3000 failed` means something else on
+> the host already listens on 3000. Either free it (`docker rm -f $(docker ps -aq --filter publish=3000)`)
+> or pick another port with `WEB_PORT=3001`. Changing `WEB_PORT` only moves the
+> host-side port; the container always listens on 3000 internally.
 
 All profiles share a named volume `webcopy-output` so Markdown files persist
 across container restarts. Inspect with:

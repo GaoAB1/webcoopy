@@ -18,6 +18,10 @@ services:
     profiles: ["web"]
     ports:
       - "${WEB_PORT:-3000}:3000"
+    # Must bind 0.0.0.0 so the port mapping is reachable from outside the
+    # container. The CLI default is 127.0.0.1, which would be unreachable
+    # through Docker's port forwarding.
+    command: ["--web", "--host", "0.0.0.0", "--port", "3000"]
     environment:
       - NODE_ENV=production
     volumes:

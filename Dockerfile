@@ -44,5 +44,6 @@ COPY package.json ./
 # Uses dumb-init for clean SIGTERM if available; falls back to plain node.
 ENTRYPOINT ["/bin/sh", "-c", "if [ -x /sbin/dumb-init ]; then exec /sbin/dumb-init -- node /app/dist/index.js \"$@\"; else exec node /app/dist/index.js \"$@\"; fi"]
 
-# Convenience default: list help. Real usage overrides this with arguments.
-CMD ["--help"]
+# Default to the Web UI so `docker run -p 3000:3000 <image>` just works.
+# The CLI profile in docker-compose.yml overrides this with explicit args.
+CMD ["--web", "--host", "0.0.0.0", "--port", "3000"]
