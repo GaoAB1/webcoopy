@@ -8,7 +8,7 @@ WORKDIR /app
 
 # Install deps first for layer caching.
 COPY package.json package-lock.json ./
-RUN npm ci
+RUN npm install
 
 # Copy sources and build.
 COPY tsconfig.json tsup.config.ts vitest.config.ts ./
@@ -28,7 +28,7 @@ WORKDIR /app
 
 # Prod deps only (commander, iconv-lite, jsdom, cheerio, turndown, …).
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+RUN npm install --omit=dev && npm cache clean --force
 
 # Bundled CLI + its entrypoint metadata.
 COPY --from=build /app/dist ./dist
