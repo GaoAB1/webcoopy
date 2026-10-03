@@ -2,7 +2,7 @@
 
 **项目名**：WebCopy
 **一句话**：把 URL 链接指向的文章"原味"转换成 Markdown 文件的 CLI 工具。
-**当前阶段**：Phase 4 完成（Docker 镜像）；Phase 3-a/b/c/d 均已交付；Web UI / VS Code 扩展 / 水印去除 / 图片压缩 待规划
+**当前阶段**：Phase 5 完成（Web UI + GitHub Actions CI + GHCR 构建）；Phase 3-a/b/c/d、Phase 4 均已交付；VS Code 扩展 / 水印去除 / 图片压缩 待规划
 
 ---
 
@@ -224,13 +224,35 @@ fetched_at: "2026-10-01T08:34:00.000Z"
 - [x] README 补 Docker 使用示例（本地挂载 `./output`、多图本地化）
 - 注：本机未装 Docker，未能实机 `docker build` 验证；Dockerfile 语法与依赖已按官方 Node 镜像 + 官方 best practice 编写
 
-### Phase 5（待规划）
+### Phase 5-a（✅ 已交付）
 
-- [ ] Web UI（拖 URL 下载，可选）
+- [x] `src/web.ts`：Node HTTP 服务器，零外部依赖（仅用 `node:http`）
+  - 端点：`GET /`（单文件 HTML/CSS/JS UI）、`GET /api/health`、`POST /api/convert`、`GET /api/list`、`GET /api/download/<slug>`
+  - 安全：`sanitizeSlug()` 拒绝路径遍历（`/`、`\\`、`..`）；64 KB 请求体上限（`req.pause()` 而非 `destroy()`，保证 413 响应先送达）；CORS 仅允许 localhost
+  - 复用 `pipeline.processUrl()`，Web UI 与 CLI 共享同一套抽取管线
+- [x] `src/cli.ts` 新增 `--web`、`--host`、`--port` 标志；`[urls...]` 改为可选（`--web` 模式无需 URL）
+- [x] `runWebServer()` 保持进程存活，转发 `SIGINT` / `SIGTERM` 优雅关闭
+- [x] UI 单文件内嵌（HTML + CSS + JS），支持拖拽 URL、粘贴 URL、剪贴板读取、实时进度、下载 Markdown
+- [x] 15 个测试用例（`tests/web.test.ts`）：HTML 页面、health、404、POST 转换（合法/非法/缺 URL）、list（空/有数据）、download（存在/404/路径遍历/413）、fetch 失败 → 502、CORS、随机端口绑定
+- [x] 总计 118 个测试用例，全部通过
+
+### Phase 5-b（✅ 已交付）
+
+- [x] `.github/workflows/ci.yml`：Node 20 + 22 × ubuntu-latest + windows-latest 矩阵
+  - 步骤：checkout → setup-node → npm ci → typecheck → test → build → smoke test（`--help`、`--web`）
+- [x] `.github/workflows/docker.yml`：Docker 多阶段构建 + GHCR 推送
+  - `docker/setup-buildx-action v3`（BuildKit 缓存）
+  - `docker/login-action v3`（`ghcr.io` + `GITHUB_TOKEN` 自动认证）
+  - `docker/metadata-action v5`（分支名 / semver tag / SHA / latest 四种 tag）
+  - `docker/build-push-action v6`（GHA 缓存 + provenance 溯源）
+  - `pull-requests` 触发（fork PR 跳过 GHCR 推送）
+- 注：Git Data API 推送不触发 `on: push` 事件；首次部署需手动触发或在有代理的环境执行 `git push`
+
+### Phase 6（待规划）
+
 - [ ] VS Code 扩展 / 浏览器扩展
 - [ ] 图片水印去除 / 压缩（需要引入 `sharp` 依赖）
 - [ ] GitHub Pages / 其他更多平台适配器
-- [ ] 发布到 Docker Hub / GHCR，附带自动 build workflow
 
 ---
 
@@ -255,6 +277,10 @@ fetched_at: "2026-10-01T08:34:00.000Z"
 | 平台适配器 | 优先于 Readability；支持 `resolveFetchUrl` 覆盖抓取端点 | GitHub README 直接抓 raw markdown 零失真；知乎 / 微信 / 掘金 DOM 结构特殊，Readability 抽不出 |
 | 本地化时机 | 仅在确定要写文件时执行 | 避免 `skipped` 场景产生孤儿图片；先 `access(filePath)` 再本地化 |
 | Docker 镜像 | 多阶段（`node:20-bookworm-slim` → `node:20-alpine`）+ `dumb-init` | Alpine 体积小；`dumb-init` 保证 `docker stop` 优雅退出；`ca-certificates` 让 HTTPS 抓取开箱可用 |
+| Web UI 实现 | 单文件 HTML/CSS/JS 内嵌于 `src/web.ts`，零外部依赖 | 最小化攻击面；无构建步骤；UI 与服务端同包发布；Docker 镜像直接可用 |
+| Web UI 安全 | `sanitizeSlug` 拒绝路径遍历 + 64 KB body cap + CORS 仅 localhost | 64 KB 防 DoS；`req.pause()` 保留 413 响应通路；CORS 限制浏览器来源 |
+| CI 矩阵 | Node 20 + 22 × ubuntu + windows | 覆盖最低支持版本和当前 LTS；Windows 验证 EBUSY 修复有效性 |
+| GHCR 推送 | `docker/build-push-action v6` + GHA 缓存 + provenance | 缓存加速后续构建；provenance 提供供应链透明度 |
 
 ---
 
@@ -264,4 +290,4 @@ fetched_at: "2026-10-01T08:34:00.000Z"
 - [ ] CLI 打包成单文件 bin（`bin/webcopy`）后，是否要提供 `npm link` 或全局安装方式？
 - [x] Phase 3-c 之后是否把 `--localize-images` 的下载并发提上去（当前是串行）？→ Phase 3-d 已落地 worker pool
 - [ ] 是否需要支持图片水印去除 / 压缩？（当前只下载原始字节）
-- [ ] Web UI / Docker 镜像的优先级？
+- [x] Web UI / Docker 镜像的优先级？→ Phase 4 Docker + Phase 5-a Web UI 均已落地

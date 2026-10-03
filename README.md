@@ -16,6 +16,8 @@ CLI-first tool. Design doc: [`DESIGN.md`](./DESIGN.md).
 - **Retry with exponential backoff** on transient failures; permanent 4xx fail fast.
 - **Batch mode** — pass multiple URLs or a file of URLs.
 - **Zero-config CLI** — `npm install && npx webcopy <url>` and go.
+- **Web UI** — drag-and-drop URLs in your browser; paste, convert, and download Markdown with one click.
+- **Docker** — multi-stage image, runs anywhere with `docker run`.
 
 ## Install
 
@@ -48,6 +50,21 @@ docker run --rm -v "$PWD/output:/app/output" webcopy \
 The image is multi-stage (Node 20 build → `node:20-alpine` runtime) and ships
 with `ca-certificates` + `dumb-init` for clean SIGTERM handling. Default entry
 is `node /app/dist/index.js`, so all CLI flags pass through unchanged.
+
+### Web UI
+
+```bash
+# Start the web server (default http://localhost:3000)
+webcopy --web
+
+# Custom host and port
+webcopy --web --host 0.0.0.0 --port 8080
+
+# Inside Docker
+docker run --rm -p 3000:3000 -v "$PWD/output:/app/output" webcopy --web
+```
+
+Open your browser and drag URLs onto the page, paste a URL, or paste a list of URLs (one per line). The UI fetches the article, converts it to Markdown, and provides a download link.
 
 ## Usage
 
@@ -88,6 +105,9 @@ webcopy https://slow.example.com/article --timeout 30000 --retries 5
 | `--localize-images` | `false` | Download remote images to `./images/` and rewrite URLs |
 | `--image-max-bytes <n>` | `10485760` | Skip images larger than `n` bytes |
 | `--image-concurrency <n>` | `4` | Max images to download in parallel (set 1 for serial) |
+| `--web` | `false` | Start web UI server instead of CLI |
+| `--host <host>` | `127.0.0.1` | Web server bind address |
+| `--port <port>` | `3000` | Web server port |
 
 ## Output format
 
@@ -121,7 +141,7 @@ function hello() {
 # Install dependencies
 npm install
 
-# Run tests (72 test cases)
+# Run tests (118 test cases)
 npm test
 
 # Watch mode
@@ -139,29 +159,35 @@ npm run build
 ```
 src/
 ├── index.ts          # CLI entry
-├── cli.ts            # commander setup
+├── cli.ts            # commander setup + --web flag
 ├── pipeline.ts       # URL → MD orchestration + error classification
 ├── fetcher.ts        # HTTP fetch with UA, timeout, retry, charset detection
 ├── extractor.ts      # Readability wrapper + data-lang preservation
 ├── converter.ts      # turndown + GFM + custom rules
+├── images.ts         # Image localization (SHA1 dedup + worker pool)
+├── meta.ts           # YAML front-matter
+├── fs.ts             # slugify + write
+├── web.ts            # Web UI server (HTTP + embedded single-file UI)
 ├── adapters.ts       # Adapter interface + registry
 ├── adapters/
 │   ├── github-readme.ts  # GitHub README → raw markdown
-│   └── zhihu.ts          # Zhihu answers/articles
-├── meta.ts           # YAML front-matter
-├── fs.ts             # slugify + write
+│   ├── zhihu.ts          # Zhihu answers/articles
+│   ├── wechat.ts         # WeChat Official Account articles
+│   └── juejin.ts         # Juejin posts
 └── rules/            # turndown custom rules
     ├── code-block.ts
     ├── image.ts
     └── link.ts
 tests/
 ├── fixtures/         # Real HTML samples
-├── adapters.test.ts  # adapter registry + github + zhihu
+├── adapters.test.ts  # adapter registry + all 4 adapters
 ├── fetcher.test.ts   # charset detection + decoding + FetchError
 ├── rules.test.ts
 ├── converter.test.ts
 ├── meta.test.ts
 ├── fs.test.ts
+├── images.test.ts    # image localization + concurrency
+├── web.test.ts       # web UI server (15 cases)
 └── pipeline.test.ts  # integration, mock fetch + retry + adapters
 ```
 
@@ -182,7 +208,12 @@ See [`DESIGN.md`](./DESIGN.md) for the full phased plan.
 
 - **Phase 2** ✅ — charset detection, retry, error classification, expanded tests.
 - **Phase 3-a** ✅ — platform adapter framework + GitHub README + Zhihu adapters.
-- **Phase 3-b** — remaining adapters (掘金 / 微信公众号 / GitHub Pages), image local download, Web UI, VS Code / browser extension, Docker image.
+- **Phase 3-b** ✅ — WeChat Official Account + Juejin adapters.
+- **Phase 3-c** ✅ — image localization (SHA1 dedup, extension inference).
+- **Phase 3-d** ✅ — concurrent image downloads (worker pool).
+- **Phase 4** ✅ — Docker multi-stage image with GHCR support.
+- **Phase 5-a** ✅ — Web UI (drag-and-drop URLs, paste, download).
+- **Phase 5-b** ✅ — GitHub Actions CI + Docker → GHCR pipeline.
 
 ## License
 
