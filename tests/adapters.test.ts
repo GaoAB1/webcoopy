@@ -275,3 +275,94 @@ describe('juejinAdapter', () => {
     expect(r.html).toBeUndefined();
   });
 });
+
+/**
+ * Juejin is a Nuxt SPA: a plain HTTP fetch returns a shell with no
+ * `.article-content` element, and the article ships inside the `__NUXT__`
+ * payload. Before this was handled, extraction produced an empty body, the
+ * pipeline fell through to Readability, and Readability picked up the loading
+ * placeholder ("Please wait...") and wrote it as the entire document.
+ */
+describe('juejinAdapter — Nuxt SSR payload', () => {
+  /** Build a payload shaped like Juejin's minified IIFE. */
+  function nuxtHtml(markContent: string, title = '示例文章 - 掘金'): string {
+    return `<html><head><title>${title}</title></head><body>
+<div id="__nuxt"><div class="view-container"></div></div>
+<script>window.__NUXT__=(function(a,b,c){return {article:{article_id:"123",article_info:{article_id:"123",mark_content:"${markContent}",user_name:"张三"},theme:a}};})(0,1,2);</script>
+</body></html>`;
+  }
+
+  it('reads mark_content from the SSR payload and returns it as markdown', async () => {
+    const md = '欢迎来到 **热门项目** 排行榜。\\n\\n![图](https://example.com/a.png)';
+    const r = await juejinAdapter.extract('https://juejin.cn/post/123', nuxtHtml(md), '');
+
+    expect(r.markdown).toBeDefined();
+    expect(r.markdown).toContain('欢迎来到');
+    expect(r.markdown).toContain('![图](https://example.com/a.png)');
+    // The payload path must bypass the HTML converter entirely.
+    expect(r.html).toBeUndefined();
+    expect(r.siteName).toBe('juejin');
+  });
+
+  it('strips the leading "theme: juejin" front-matter Juejin embeds', async () => {
+    const md = '---\\ntheme: juejin\\n---\\n\\n正文从这里开始。';
+    const r = await juejinAdapter.extract('https://juejin.cn/post/123', nuxtHtml(md), '');
+
+    expect(r.markdown).toBe('正文从这里开始。');
+    expect(r.markdown).not.toContain('theme: juejin');
+  });
+
+  it('does not strip a front-matter block that is not the theme header', async () => {
+    const md = '---\\ntitle: 自定义\\n---\\n\\n正文。';
+    const r = await juejinAdapter.extract('https://juejin.cn/post/123', nuxtHtml(md), '');
+
+    expect(r.markdown).toContain('title: 自定义');
+  });
+
+  it('unescapes JS string escapes including \\u002F slashes', async () => {
+    const md = '![x](https:\\u002F\\u002Fexample.com\\u002Fimg.png)\\n\\n换行符测试';
+    const r = await juejinAdapter.extract('https://juejin.cn/post/123', nuxtHtml(md), '');
+
+    expect(r.markdown).toContain('https://example.com/img.png');
+    expect(r.markdown).toContain('\n');
+  });
+
+  it('takes the title from <title> without the 掘金 suffix', async () => {
+    const r = await juejinAdapter.extract(
+      'https://juejin.cn/post/123',
+      nuxtHtml('正文内容足够长以通过校验。', '我的掘金文章 - 掘金'),
+      ''
+    );
+    expect(r.title).toBe('我的掘金文章');
+  });
+
+  it('does not mistake a nav "title" field for the article title', async () => {
+    // The minified payload contains unrelated title fields such as
+    // `title:"推荐"` for nav tabs — those must never win.
+    const html = `<html><head><title>真实标题 - 掘金</title></head><body>
+<script>window.__NUXT__=(function(a){return {category:{list:[{title:"推荐"},{title:"热门"}]},article:{article_info:{mark_content:"正文内容。"}}};})(0);</script>
+</body></html>`;
+    const r = await juejinAdapter.extract('https://juejin.cn/post/123', html, '');
+    expect(r.title).toBe('真实标题');
+  });
+
+  it('falls back to the DOM path when no payload is present', async () => {
+    const html = `<html><head><title>DOM 文章 - 掘金</title></head><body>
+<div class="article-content">${'<p>这是一段足够长的正文段落内容，用于通过适配器的最小长度校验。</p>'.repeat(5)}</div>
+</body></html>`;
+    const r = await juejinAdapter.extract('https://juejin.cn/post/1', html, '');
+
+    expect(r.markdown).toBeUndefined();
+    expect(r.html).toBeDefined();
+    expect(r.html).toContain('这是一段足够长的正文段落内容');
+  });
+
+  it('does not return the loading placeholder as content', async () => {
+    // Regression: an SPA shell with no payload must not yield "Please wait...".
+    const html = '<html><head><title>x - 掘金</title></head><body><div id="__nuxt"></div></body></html>';
+    const r = await juejinAdapter.extract('https://juejin.cn/post/1', html, '');
+
+    expect(r.markdown).toBeUndefined();
+    expect(r.html).toBeUndefined();
+  });
+});
