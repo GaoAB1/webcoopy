@@ -55,6 +55,25 @@ override (e.g. `docker run --rm <image> https://example.com/article`).
 
 ### docker-compose
 
+> **Updating an existing deployment.** The services declare both `build: .` and
+> a pinned `image:`, so Docker may reuse a locally built image instead of the
+> published one. When you want the released image rather than the local source
+> tree, always pull and recreate:
+>
+> ```bash
+> docker compose pull
+> docker compose --profile web up -d --force-recreate
+> ```
+>
+> Then confirm which build is actually running:
+>
+> ```bash
+> docker compose --profile cli run --rm webcopy --doctor
+> ```
+>
+> `--doctor` lists each adapter's capabilities. If `juejin` does not report
+> `ssr-payload+dom`, the running build is stale.
+
 ```bash
 # Web UI → http://localhost:3000
 # NOTE: the `web` service lives under the `web` profile, so the profile flag
@@ -150,6 +169,7 @@ webcopy https://slow.example.com/article --timeout 30000 --retries 5
 | `--web` | `false` | Start web UI server instead of CLI |
 | `--host <host>` | `127.0.0.1` | Web server bind address |
 | `--port <port>` | `3000` | Web server port |
+| `--doctor` | `false` | Print build info and adapter capabilities, then exit |
 
 ## Output format
 

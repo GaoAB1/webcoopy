@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { buildCli } from '../src/cli.js';
 import type { WebServerOptions } from '../src/web.js';
+import { defaultAdapters } from '../src/pipeline.js';
 
 /**
  * Regression coverage for the Docker startup bug:
@@ -69,5 +70,50 @@ describe('cli --web dispatch', () => {
 
     process.exitCode = prevExitCode;
     errSpy.mockRestore();
+  });
+});
+
+/**
+ * `--doctor` exists to settle "I pulled the image but the fix isn't in"
+ * confusion: it reports which extraction paths the running build supports,
+ * derived from the live adapter objects rather than a hard-coded string.
+ */
+describe('cli --doctor', () => {
+  /**
+   * The capability probe is internal to cli.ts, so reproduce the same
+   * behaviour here: feed each adapter an SPA shell carrying an SSR payload and
+   * see whether markdown comes back.
+   */
+  function supportsSsrPayload(adapter: { extract: unknown }): boolean {
+    const probe =
+      '<html><head><title>probe</title></head><body>' +
+      '<script>window.__NUXT__=(function(a){return {article:{article_info:{mark_content:"probe-body"}}};})(0);</script>' +
+      '</body></html>';
+    const r = (adapter as {
+      extract: (u: string, h: string, p: string) => { markdown?: string } | undefined;
+    }).extract('https://juejin.cn/post/1', probe, '');
+    return typeof r?.markdown === 'string';
+  }
+
+  it('reports the juejin adapter as SSR-payload capable', () => {
+    const juejin = defaultAdapters().list().find((a) => a.name === 'juejin');
+    expect(juejin).toBeDefined();
+    // If this fails, the running build predates the Nuxt payload support.
+    expect(supportsSsrPayload(juejin!)).toBe(true);
+  });
+
+  it('runs --doctor without touching the network or writing files', async () => {
+    const program = buildCli();
+    program.exitOverride();
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    await program.parseAsync(['node', 'webcopy', '--doctor']);
+
+    const output = logSpy.mock.calls.flat().join('\n');
+    expect(output).toContain('webcopy');
+    expect(output).toContain('juejin');
+    expect(output).toContain('ssr-payload+dom');
+
+    logSpy.mockRestore();
   });
 });

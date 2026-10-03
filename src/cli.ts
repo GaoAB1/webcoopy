@@ -1,7 +1,10 @@
 import { Command } from 'commander';
 import { readFile } from 'node:fs/promises';
-import { processMany, type PipelineOptions } from './pipeline.js';
+import { processMany, defaultAdapters, type PipelineOptions } from './pipeline.js';
 import { startServer, type WebServerOptions } from './web.js';
+
+/** Kept in sync with package.json — surfaced by `--version` and `--doctor`. */
+export const CLI_VERSION = '0.1.0';
 
 export interface CliDeps {
   /** Injectable for tests. */
@@ -21,7 +24,7 @@ export function buildCli(deps: CliDeps = {}): Command {
   program
     .name('webcopy')
     .description('Fetch a URL and convert the article body to faithful Markdown.')
-    .version('0.1.0')
+    .version(CLI_VERSION)
     .argument('[urls...]', 'one or more article URLs (omit when using --web)')
     .option('-o, --out <dir>', 'output directory', './output')
     .option('--file <path>', 'read URLs from a file (one per line, # comments supported)')
@@ -36,7 +39,12 @@ export function buildCli(deps: CliDeps = {}): Command {
     .option('--web', 'start the web UI server instead of the CLI pipeline', false)
     .option('--host <host>', 'bind address for --web', '127.0.0.1')
     .option('--port <port>', 'port for --web', (v) => Number(v), 3000)
+    .option('--doctor', 'print build info and adapter capabilities, then exit', false)
     .action(async (urls: string[], opts) => {
+      if (opts.doctor) {
+        printDoctor();
+        return;
+      }
       if (opts.web) {
         await runWebServer(opts, startWeb);
         return;
@@ -107,6 +115,48 @@ async function readUrlsFromFile(path?: string): Promise<string[]> {
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter((line) => line.length > 0 && !line.startsWith('#'));
+}
+
+/**
+ * Diagnostic output for verifying which build is actually running.
+ *
+ * Mainly exists to settle "I pulled the image but the fix isn't in" confusion:
+ * the adapter capability list below is derived from the live adapter objects,
+ * so a build that predates the Juejin SSR support reports `dom-only` here.
+ */
+function printDoctor(): void {
+  const registry = defaultAdapters();
+  console.log(`webcopy ${CLI_VERSION}`);
+  console.log(`node    ${process.version} (${process.platform}/${process.arch})`);
+  console.log('');
+  console.log('adapters:');
+  for (const a of registry.list()) {
+    const cap = adapterCapabilities(a);
+    console.log(`  ${a.name.padEnd(14)} ${cap.padEnd(22)} ${a.description}`);
+  }
+  console.log('');
+  console.log('If "juejin" above does not say "ssr-payload+dom", the running build');
+  console.log('predates the Nuxt SSR payload support — pull the image again.');
+}
+
+/** Report which extraction paths an adapter supports. */
+function adapterCapabilities(adapter: { name: string; extract: unknown }): string {
+  // Probe the adapter with an SPA-shaped shell carrying a payload. Builds
+  // without payload support return nothing usable for it.
+  const probe =
+    '<html><head><title>probe</title></head><body>' +
+    '<script>window.__NUXT__=(function(a){return {article:{article_info:{mark_content:"probe-body"}}};})(0);</script>' +
+    '</body></html>';
+  try {
+    const r = (adapter as {
+      extract: (u: string, h: string, p: string) => { markdown?: string; html?: string } | undefined;
+    }).extract('https://juejin.cn/post/1', probe, '');
+    if (r && typeof r.markdown === 'string') return 'ssr-payload+dom';
+    if (r && typeof r.html === 'string') return 'dom-only';
+    return 'dom-only';
+  } catch {
+    return 'n/a';
+  }
 }
 
 function errorHint(code?: string): string {
