@@ -1,0 +1,56 @@
+# WorkBuddy
+.workbuddy/memory/
+
+# Dependencies
+node_modules/
+vendor/
+.pnp/
+.pnp.js
+
+# Build output
+dist/
+build/
+out/
+output/
+coverage/
+*.tsbuildinfo
+test-out/
+
+# Env & secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+id_rsa
+id_rsa.pub
+secrets/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS & editor
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp
+*~
+
+# Temp & cache
+.cache/
+.tmp/
+temp/
+coverage/
+.parcel-cache/
+.eslintcache
+.stylelintcache
+*.timestamp-*.mjs
+*.bundled_*.mjs
+tsup.config.bundled_*.mjs
+vitest.config.ts.timestamp-*.mjs

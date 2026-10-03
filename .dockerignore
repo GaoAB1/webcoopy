@@ -1,0 +1,32 @@
+# Version control & editor noise
+.git
+.gitignore
+.idea
+.vscode
+*.swp
+
+# Dependencies & build outputs (rebuilt inside the image)
+node_modules
+dist
+
+# Tests & coverage (not needed at runtime)
+tests
+coverage
+.nyc_output
+*.test.ts
+vitest.config.ts
+
+# Local artifacts
+*.log
+npm-debug.log*
+.env
+.env.*
+
+# Project metadata not needed at runtime
+.workbuddy
+tsup.config.ts
+tsup.config.bundled_usuf2hx0dhi.mjs
+vitest.config.ts.timestamp-*.mjs
+
+# Docs (optional; keep image lean — DESIGN.md / README.md still ship via npm pack)
+AGENTS.md
