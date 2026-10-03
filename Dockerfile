@@ -25,9 +25,9 @@ FROM node:20-alpine
 
 # ca-certificates: HTTPS fetches need a root CA bundle.
 # dumb-init: proper signal forwarding so `docker stop` sends SIGTERM cleanly.
-# (optional — ENTRYPOINT below falls back to plain node if absent)
 RUN apk add --no-cache ca-certificates dumb-init \
-    && update-ca-certificates
+    && update-ca-certificates \
+    && ln -sf /usr/bin/dumb-init /sbin/dumb-init
 
 WORKDIR /app
 
@@ -40,9 +40,17 @@ COPY --from=build /app/dist ./dist
 COPY package.json ./
 
 # The bin declares "webcopy" → ./dist/index.js (see package.json "bin").
-# Use absolute paths so the container works regardless of $PATH.
-# Uses dumb-init for clean SIGTERM if available; falls back to plain node.
-ENTRYPOINT ["/bin/sh", "-c", "if [ -x /sbin/dumb-init ]; then exec /sbin/dumb-init -- node /app/dist/index.js \"$@\"; else exec node /app/dist/index.js \"$@\"; fi"]
+#
+# NOTE: use the *exec* form (JSON array), never `sh -c "<script>"`. With the
+# shell form, Docker appends CMD as arguments to `sh -c`, and sh assigns the
+# first of them to $0 — so for `CMD ["--web", ...]` the `--web` flag became the
+# script's own name and never reached node, leaving only `--host 0.0.0.0
+# --port 3000`. The CLI then fell through to the pipeline branch and exited
+# with "error: no URLs provided".
+#
+# dumb-init is installed and hard-linked to /sbin/dumb-init above, so the build
+# fails loudly if it is ever missing instead of the container dying at runtime.
+ENTRYPOINT ["/sbin/dumb-init", "--", "node", "/app/dist/index.js"]
 
 # Default to the Web UI so `docker run -p 3000:3000 <image>` just works.
 # The CLI profile in docker-compose.yml overrides this with explicit args.
