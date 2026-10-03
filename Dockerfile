@@ -25,6 +25,7 @@ FROM node:20-alpine
 
 # ca-certificates: HTTPS fetches need a root CA bundle.
 # dumb-init: proper signal forwarding so `docker stop` sends SIGTERM cleanly.
+# (optional — ENTRYPOINT below falls back to plain node if absent)
 RUN apk add --no-cache ca-certificates dumb-init \
     && update-ca-certificates
 
@@ -39,8 +40,9 @@ COPY --from=build /app/dist ./dist
 COPY package.json ./
 
 # The bin declares "webcopy" → ./dist/index.js (see package.json "bin").
-# Use the absolute path so the container works regardless of $PATH.
-ENTRYPOINT ["/sbin/dumb-init", "--", "node", "/app/dist/index.js"]
+# Use absolute paths so the container works regardless of $PATH.
+# Uses dumb-init for clean SIGTERM if available; falls back to plain node.
+ENTRYPOINT ["/bin/sh", "-c", "if [ -x /sbin/dumb-init ]; then exec /sbin/dumb-init -- node /app/dist/index.js \"$@\"; else exec node /app/dist/index.js \"$@\"; fi"]
 
 # Convenience default: list help. Real usage overrides this with arguments.
 CMD ["--help"]
