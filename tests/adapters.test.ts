@@ -346,6 +346,25 @@ describe('juejinAdapter — Nuxt SSR payload', () => {
     expect(r.title).toBe('真实标题');
   });
 
+  it('reads mark_content when the article key is minified to an alias (2026-10 payload shape)', async () => {
+    // Real-world shape captured from juejin on 2026-10-03: the IIFE assigns
+    // everything to single-letter aliases and `article` never appears as a
+    // literal object key, so the `article:{` anchor fails and the adapter must
+    // scan the whole payload for `mark_content` instead.
+    const md = '---\\ntheme: juejin\\n---\\n\\n欢迎来到 **2026 年 7 月 GitHub 热门项目** 榜单。\\n\\n正文继续。';
+    const html = `<html><head><title>🚀 2026 年 7 月 GitHub 十大热门项目排行榜 - 掘金</title></head><body>
+<div id="__nuxt"><div class="view-container"></div></div>
+<script>window.__NUXT__=(function(a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u,v,w,x,y,z,A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P,Q,R,S){u.loading=a;u.skeleton=d;u.cursor=f;u.data=[];u.total=b;u.hasMore=d;J.id=x;J.self_description=j;J.followed=a;J.viewerIsFollowing=j;J.community=j;J.level=t;J.user_id=x;J.user_name=F;J.company="想自己开个公司";J.job_title="🏆独立开发者";return {user:J,rankList:{list:[{article_id:x,author_user_info:J,rank_index:.05653469,is_hot:b,status:s,verify_status:g,audit_status:s,mark_content:"${md}"}],loading:a,skeleton:d,cursor:f,total:b,hasMore:d},theme:a};})(0,1,2,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38);</script>
+</body></html>`;
+    const r = await juejinAdapter.extract('https://juejin.cn/post/7668296872551792640', html, '');
+
+    expect(r.markdown).toBeDefined();
+    expect(r.markdown).not.toContain('theme: juejin');
+    expect(r.markdown).toContain('欢迎来到 **2026 年 7 月 GitHub 热门项目** 榜单。');
+    expect(r.title).toBe('🚀 2026 年 7 月 GitHub 十大热门项目排行榜');
+    expect(r.siteName).toBe('juejin');
+  });
+
   it('falls back to the DOM path when no payload is present', async () => {
     const html = `<html><head><title>DOM 文章 - 掘金</title></head><body>
 <div class="article-content">${'<p>这是一段足够长的正文段落内容，用于通过适配器的最小长度校验。</p>'.repeat(5)}</div>

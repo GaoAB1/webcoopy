@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Buffer } from 'node:buffer';
@@ -108,6 +108,26 @@ describe('processUrl (mocked fetch)', () => {
     expect(r.ok).toBe(false);
     expect(r.error).toMatch(/article/i);
     expect(r.errorCode).toBe('no-article');
+  });
+
+  it.each([
+    ['English placeholder', '<html><head><title>Post</title></head><body><div id="app">Please wait...</div></body></html>'],
+    ['Chinese placeholder', '<html><head><title>请稍候</title></head><body><div id="app">请稍候…</div></body></html>'],
+    ['anti-bot challenge', '<html><head><title>Security Check</title></head><body><div>Just a moment...</div><script>challenge();</script></body></html>']
+  ])('returns ok=false and writes no file for a %s page', async (_label, body) => {
+    // Regression: SPA shells / anti-bot interstitials used to let Readability
+    // "extract" the loading placeholder, producing a file whose entire body
+    // was "Please wait...". It must be rejected as no-article instead.
+    globalThis.fetch = vi.fn(async () =>
+      new Response(body, { status: 200, headers: { 'Content-Type': 'text/html' } })
+    ) as unknown as typeof fetch;
+    const r = await processUrl('https://juejin.cn/post/7668296872551792640', {
+      outDir: dir,
+      overwrite: false
+    });
+    expect(r.ok).toBe(false);
+    expect(r.errorCode).toBe('no-article');
+    expect(await readdir(dir)).toHaveLength(0);
   });
 
   it('returns ok=false with errorCode=timeout when the request times out', async () => {

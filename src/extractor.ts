@@ -42,8 +42,21 @@ export function preprocessForExtraction(html: string): string {
 }
 
 /**
+ * SPA loading / anti-bot placeholder messages. ByteDance sites (Juejin et al.)
+ * intermittently serve a challenge or degraded shell whose only visible text
+ * is a spinner message. Readability happily "extracts" that as the article,
+ * which used to produce output files whose entire body was "Please wait...".
+ * Matched against the whole whitespace-collapsed text content, so a real
+ * article (which is never just one of these words) never trips the check.
+ */
+const LOADING_PLACEHOLDER_RE =
+  /^(?:please\s+wait(?:\s*\.\.+)?|loading(?:\s*\.\.+)?|just\s+a\s+moment|checking\s+your\s+browser|verifying\s+your\s+browser|verify(?:ing)?\s+you\s+are\s+human|请稍候|加载中|正在加载|安全验证)[.…\s]*$/i;
+
+/**
  * Extract the main article from a full HTML page using Mozilla Readability.
- * Returns null if the page does not appear to be an article.
+ * Returns null if the page does not appear to be an article (including when
+ * the only extractable text is a loading/anti-bot placeholder — the pipeline
+ * then reports `no-article` instead of writing a placeholder file).
  */
 export function extractArticle(html: string): ExtractedArticle | null {
   const preprocessed = preprocessForExtraction(html);
@@ -52,6 +65,9 @@ export function extractArticle(html: string): ExtractedArticle | null {
 
   const article = new Readability(doc).parse();
   if (!article || !article.content) return null;
+
+  const text = (article.textContent ?? '').replace(/\s+/g, ' ').trim();
+  if (!text || LOADING_PLACEHOLDER_RE.test(text)) return null;
 
   return {
     title: article.title ?? '',
