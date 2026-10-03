@@ -27,6 +27,25 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Verify lock file has cross-platform optional deps
+        shell: bash
+        run: |
+          # A lock generated on Windows omits Linux platform packages, which
+          # makes `npm ci` fail here. Fail fast with a clear fix hint instead
+          # of a cryptic rollup error later.
+          if ! node -e "
+            const l = require('./package-lock.json');
+            const need = [
+              'node_modules/@rollup/rollup-linux-x64-gnu',
+              'node_modules/@esbuild/linux-x64'
+            ];
+            const missing = need.filter((k) => !l.packages[k]);
+            if (missing.length) { console.error('missing:', missing.join(', ')); process.exit(1); }
+          "; then
+            echo "::error::package-lock.json is missing Linux platform packages. Run 'npm run fix:lock' and commit."
+            exit 1
+          fi
+
       - name: Setup Node.js ${{ matrix.node }}
         uses: actions/setup-node@v4
         with:
@@ -34,14 +53,11 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        # NOTE: `npm ci` is intentionally avoided. package-lock.json is
-        # generated on Windows, and npm does not resolve platform-specific
-        # optional deps (e.g. @rollup/rollup-linux-x64-gnu) from a lock file
-        # produced on another OS — `npm ci` then fails on Linux with
-        # "Cannot find module @rollup/rollup-linux-x64-gnu".
-        # See https://github.com/npm/cli/issues/4828
-        # The Dockerfile works around the same bug the same way.
-        run: npm install
+        # package-lock.json is normalised by scripts/patch-lock-optional-deps.mjs
+        # so it carries platform-specific optional deps for every OS. Without
+        # that patch a Windows-generated lock makes `npm ci` fail on Linux with
+        # "Cannot find module @rollup/rollup-linux-x64-gnu" (npm/cli#4828).
+        run: npm ci
 
       - name: Typecheck
         run: npm run typecheck
