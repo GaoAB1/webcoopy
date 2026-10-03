@@ -34,7 +34,14 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        run: npm ci
+        # NOTE: `npm ci` is intentionally avoided. package-lock.json is
+        # generated on Windows, and npm does not resolve platform-specific
+        # optional deps (e.g. @rollup/rollup-linux-x64-gnu) from a lock file
+        # produced on another OS — `npm ci` then fails on Linux with
+        # "Cannot find module @rollup/rollup-linux-x64-gnu".
+        # See https://github.com/npm/cli/issues/4828
+        # The Dockerfile works around the same bug the same way.
+        run: npm install
 
       - name: Typecheck
         run: npm run typecheck
@@ -48,5 +55,25 @@ jobs:
       - name: Smoke test (CLI --help)
         run: node dist/index.js --help
 
-      - name: Smoke test (web --help)
-        run: node dist/index.js --web --port 0 --out /tmp/webcopy-smoke 2>&1 | head -3 || true
+      # Verify the web server actually binds and answers /api/health, then
+      # shut it down. A plain `--web` invocation blocks forever, so the server
+      # is started from a Node script that polls health and exits.
+      - name: Smoke test (web server + /api/health)
+        shell: bash
+        run: |
+          node dist/index.js --web --host 127.0.0.1 --port 31337 --out ./smoke-out &
+          SERVER_PID=$!
+          ok=0
+          for i in $(seq 1 20); do
+            sleep 1
+            if node -e "fetch('http://127.0.0.1:31337/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"; then
+              ok=1
+              break
+            fi
+          done
+          kill $SERVER_PID 2>/dev/null || true
+          if [ "$ok" != "1" ]; then
+            echo "web server health check failed"
+            exit 1
+          fi
+          echo "web server health check passed"
