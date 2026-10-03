@@ -14,7 +14,6 @@ tests
 coverage
 .nyc_output
 *.test.ts
-vitest.config.ts
 
 # Local artifacts
 *.log
@@ -24,7 +23,6 @@ npm-debug.log*
 
 # Project metadata not needed at runtime
 .workbuddy
-tsup.config.ts
 tsup.config.bundled_usuf2hx0dhi.mjs
 vitest.config.ts.timestamp-*.mjs
 
