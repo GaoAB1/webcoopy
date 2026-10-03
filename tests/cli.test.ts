@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
+import { mkdtemp, rm, readFile, readdir } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { buildCli } from '../src/cli.js';
 import type { WebServerOptions } from '../src/web.js';
 import { defaultAdapters } from '../src/pipeline.js';
@@ -148,7 +151,7 @@ describe('cli --doctor', () => {
     expect(startWebServer).not.toHaveBeenCalled();
     expect(output).toContain('live probe:');
     // The probe reports a result line for the URL rather than a "wrote" line.
-    expect(output).toMatch(/RESULT: (FAILED|error)/);
+    expect(output).toMatch(/RESULT:\s+(FAILED|error)/);
     expect(output).not.toContain('wrote  ');
 
     logSpy.mockRestore();
@@ -169,5 +172,86 @@ describe('cli --doctor', () => {
     expect(output).toContain('adapter:');
 
     logSpy.mockRestore();
+  });
+
+  /**
+   * The live probe must report page-level markers so a failing extraction can
+   * be attributed to its layer (transport / anti-bot / SSR payload / DOM /
+   * Readability) without re-running anything on the affected machine.
+   */
+  describe('live probe diagnostics', () => {
+    const PAYLOAD_HTML =
+      '<html><head><title>诊断标题 - 掘金</title></head><body>' +
+      '<script>window.__NUXT__=(function(a){return {article:{article_info:{mark_content:"诊断正文内容。"}}};})(0);</script>' +
+      '</body></html>';
+    const EMPTY_PAYLOAD_HTML =
+      '<html><head><title>降级 - 掘金</title></head><body>' +
+      '<script>window.__NUXT__=(function(a){return {other:1};})(0);</script></body></html>';
+
+    function mockFetchOnce(body: string): void {
+      vi.stubGlobal('fetch', vi.fn(async () =>
+        new Response(body, { status: 200, headers: { 'Content-Type': 'text/html' } })
+      ));
+    }
+
+    it('reports markers and RESULT ok for a page with a usable payload', async () => {
+      mockFetchOnce(PAYLOAD_HTML);
+      const program = buildCli();
+      program.exitOverride();
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      await program.parseAsync(['node', 'webcopy', '--doctor', 'https://juejin.cn/post/123']);
+
+      const output = logSpy.mock.calls.flat().join('\n');
+      expect(output).toContain('markers:');
+      expect(output).toContain('__NUXT__=yes');
+      expect(output).toContain('mark_content=yes');
+      expect(output).toContain('extract:   markdown');
+      expect(output).toContain('RESULT:    ok');
+
+      logSpy.mockRestore();
+      vi.unstubAllGlobals();
+    });
+
+    it('explains a payload-without-article response and mentions --dump-html', async () => {
+      mockFetchOnce(EMPTY_PAYLOAD_HTML);
+      const program = buildCli();
+      program.exitOverride();
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      await program.parseAsync(['node', 'webcopy', '--doctor', 'https://juejin.cn/post/123']);
+
+      const output = logSpy.mock.calls.flat().join('\n');
+      expect(output).toContain('RESULT:    FAILED [no-article]');
+      expect(output).toContain('SSR payload present but carries no article data');
+      expect(output).toContain('--dump-html');
+
+      logSpy.mockRestore();
+      vi.unstubAllGlobals();
+    });
+
+    it('saves the raw page when --dump-html is given', async () => {
+      mockFetchOnce(PAYLOAD_HTML);
+      const program = buildCli();
+      program.exitOverride();
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      const outDir = await mkdtemp(join(tmpdir(), 'webcopy-dump-'));
+      await program.parseAsync([
+        'node', 'webcopy', '--doctor', 'https://juejin.cn/post/123', '--dump-html', outDir
+      ]);
+
+      const files = await readdir(outDir);
+      expect(files).toEqual(['123.html']);
+      const dumped = await readFile(join(outDir, '123.html'), 'utf-8');
+      expect(dumped).toContain('__NUXT__');
+
+      const output = logSpy.mock.calls.flat().join('\n');
+      expect(output).toContain('html saved:');
+
+      logSpy.mockRestore();
+      vi.unstubAllGlobals();
+      await rm(outDir, { recursive: true, force: true });
+    });
   });
 });

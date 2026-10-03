@@ -1,6 +1,9 @@
 import { Command } from 'commander';
-import { readFile, rm } from 'node:fs/promises';
-import { processMany, processUrl, defaultAdapters, type PipelineOptions } from './pipeline.js';
+import { readFile, rm, writeFile, mkdir } from 'node:fs/promises';
+import { join } from 'node:path';
+import { processMany, defaultAdapters, type PipelineOptions } from './pipeline.js';
+import { fetchHtml, FetchError } from './fetcher.js';
+import { extractArticle } from './extractor.js';
 import { startServer, type WebServerOptions } from './web.js';
 
 /** Kept in sync with package.json — surfaced by `--version` and `--doctor`. */
@@ -40,6 +43,10 @@ export function buildCli(deps: CliDeps = {}): Command {
     .option('--host <host>', 'bind address for --web', '127.0.0.1')
     .option('--port <port>', 'port for --web', (v) => Number(v), 3000)
     .option('--doctor', 'print build info and adapter capabilities, then exit', false)
+    .option(
+      '--dump-html [dir]',
+      'with --doctor <url>: save the raw fetched HTML for inspection'
+    )
     .action(async (urls: string[], opts) => {
       if (opts.doctor) {
         printDoctor();
@@ -49,8 +56,7 @@ export function buildCli(deps: CliDeps = {}): Command {
           await probeUrls(urls, opts);
         }
         return;
-      }
-      if (opts.web) {
+      }      if (opts.web) {
         await runWebServer(opts, startWeb);
         return;
       }
@@ -167,12 +173,17 @@ function adapterCapabilities(adapter: { name: string; extract: unknown }): strin
 
 /**
  * Fetch each URL and report what the pipeline actually produced, without
- * writing anything to disk. Used by `--doctor <url>` to tell "the build is
- * stale" apart from "the site changed its markup".
+ * writing anything to disk (unless --dump-html is given). Used by
+ * `--doctor <url>` to tell "the build is stale" apart from "the site served a
+ * degraded/challenge page".
+ *
+ * The report includes page-level markers (__NUXT__, mark_content, article
+ * content classes, challenge-page signatures) so a failing extraction can be
+ * attributed to its layer: transport, anti-bot, payload, DOM, or Readability.
  */
 async function probeUrls(
   urls: string[],
-  opts: { timeout?: number; retries?: number }
+  opts: { timeout?: number; retries?: number; dumpHtml?: string }
 ): Promise<void> {
   const registry = defaultAdapters();
   console.log('');
@@ -180,37 +191,146 @@ async function probeUrls(
 
   for (const url of urls) {
     const matched = registry.findFor(url);
-    const adapter = matched[0]?.name ?? '(none — Readability fallback)';
+    const adapter = matched[0];
     console.log(`  ${url}`);
-    console.log(`    adapter: ${adapter}`);
+    console.log(`    adapter: ${adapter?.name ?? '(none — Readability fallback)'}`);
 
     try {
-      const result = await processUrl(url, {
-        outDir: './.webcopy-probe',
-        overwrite: true,
-        verbose: false,
-        fetch: { timeoutMs: opts.timeout, retries: opts.retries }
+      const { html, url: finalUrl, status, charset } = await fetchHtml(url, {
+        timeoutMs: opts.timeout,
+        retries: opts.retries
       });
 
-      if (!result.ok) {
-        console.log(`    RESULT: FAILED [${result.errorCode ?? 'unknown'}] ${result.error ?? ''}\n`);
-        continue;
+      console.log(`    fetched:   HTTP ${status}, ${html.length} chars, charset ${charset}`);
+      console.log(`    final url: ${finalUrl}`);
+
+      const title = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]?.trim() ?? '(none)';
+      console.log(`    title:     ${title}`);
+
+      console.log(`    markers:   ${htmlMarkers(html)}`);
+
+      // Layer 1: adapter extraction.
+      let adapterNote = 'no content';
+      if (adapter) {
+        try {
+          const r = await adapter.extract(url, html, finalUrl);
+          if (typeof r.markdown === 'string') {
+            adapterNote = `markdown ${r.markdown.length} chars`;
+          } else if (typeof r.html === 'string') {
+            adapterNote = `html ${r.html.length} chars`;
+          } else if (r.retryWithBrowser) {
+            adapterNote = 'empty — flagged retryWithBrowser (degraded page?)';
+          }
+        } catch (err) {
+          adapterNote = `threw: ${err instanceof Error ? err.message : String(err)}`;
+        }
+      }
+      console.log(`    extract:   ${adapterNote}`);
+
+      // Layer 2: Readability.
+      const article = extractArticle(html);
+      console.log(`    readable:  ${article ? `${article.textContent.trim().length} chars text` : 'no article'}`);
+
+      // Save the raw page whenever the user asked for it (success or not) so
+      // it can be compared across machines or attached to a bug report.
+      // `--dump-html` without a value arrives as `true` — use the default dir.
+      let dumpNote = '';
+      if (opts.dumpHtml !== undefined) {
+        const dir = typeof opts.dumpHtml === 'string' && opts.dumpHtml.length > 0
+          ? opts.dumpHtml
+          : './output';
+        const dumped = await dumpProbeHtml(url, html, dir);
+        dumpNote = dumped ? `; html saved: ${dumped}` : '; html dump failed';
       }
 
-      const body = result.path ? await readFile(result.path, 'utf-8').catch(() => '') : '';
-      const placeholder = /^\s*(please\s*wait|loading)\s*\.{0,3}\s*$/im.test(body);
-      console.log(`    title:  ${result.title ?? '(none)'}`);
-      console.log(`    body:   ${body.length} chars${placeholder ? '  ← LOOKS LIKE A PLACEHOLDER PAGE' : ''}`);
-      console.log(`    RESULT: ${placeholder ? 'SUSPECT' : 'ok'}\n`);
+      const ok =
+        adapterNote.startsWith('markdown') ||
+        adapterNote.startsWith('html') ||
+        (article !== null && article.textContent.trim().length >= 100);
 
-      // Probe output is throwaway — do not leave it behind.
-      if (result.path) await rm(result.path, { force: true }).catch(() => {});
+      if (ok) {
+        console.log(`    RESULT:    ok${dumpNote}`);
+      } else {
+        console.log(`    RESULT:    FAILED [no-article] ${noArticleHint(html, opts.dumpHtml !== undefined)}${dumpNote}`);
+      }
+      console.log('');
     } catch (err) {
-      console.log(`    RESULT: error ${err instanceof Error ? err.message : String(err)}\n`);
+      if (err instanceof FetchError) {
+        console.log(`    RESULT:    FAILED [${err.code}] ${err.message}\n`);
+      } else {
+        console.log(`    RESULT:    error ${err instanceof Error ? err.message : String(err)}\n`);
+      }
     }
   }
 
   await rm('./.webcopy-probe', { recursive: true, force: true }).catch(() => {});
+}
+
+/** Compact on/off report of the markers that decide where extraction fails. */
+function htmlMarkers(html: string): string {
+  // NOTE: don't key on secsdk/acrawler — ByteDance sites reference those SDK
+  // scripts on every normal page. A real challenge page is tiny (<20KB) and
+  // displays a wait/verification message; that combination is the signal.
+  const challenge =
+    /请稍候|安全验证|captcha|just\s+a\s+moment|please\s+wait/i.test(html) && html.length < 20_000;
+  const flags: Array<[string, boolean]> = [
+    ['__NUXT__', html.includes('__NUXT__')],
+    ['mark_content', html.includes('mark_content')],
+    ['article-content', /article-content/i.test(html)],
+    ['please-wait', /please\s+wait/i.test(html)],
+    ['challenge', challenge]
+  ];
+  return flags.map(([name, on]) => `${name}${on ? '=yes' : '=no'}`).join('  ');
+}
+
+/**
+ * A targeted explanation for a no-article result, driven by the markers.
+ * A ByteDance-style challenge page is tiny, has no SSR payload, and displays
+ * a wait/verification message — that combination, not any single keyword.
+ */
+function noArticleHint(html: string, dumpEnabled: boolean): string {
+  const hasPayload = html.includes('__NUXT__');
+  const hasMarkContent = html.includes('mark_content');
+  const challenge = /请稍候|安全验证|captcha|just\s+a\s+moment|please\s+wait/i.test(html) && html.length < 20_000;
+  const where = dumpEnabled ? 'see the saved .html file' : 're-run with --dump-html to save the page';
+
+  if (challenge) {
+    return `the site served an anti-bot challenge page; browser-mode retry did not help — ${where}`;
+  }
+  if (hasPayload && !hasMarkContent) {
+    return `SSR payload present but carries no article data — the site degraded this response for this client; ${where}`;
+  }
+  if (!hasPayload && !challenge) {
+    return `page is not an SPA shell and no article was detected — it may be a non-article page or an unhandled layout; ${where}`;
+  }
+  return `no readable article detected; ${where}`;
+}
+
+/** Save the raw fetched HTML so it can be shared for offline inspection. */
+async function dumpProbeHtml(
+  url: string,
+  html: string,
+  dir: string
+): Promise<string | undefined> {
+  try {
+    await mkdir(dir, { recursive: true });
+    const slug = urlSafeProbeSlug(url);
+    const file = join(dir, `${slug}.html`);
+    await writeFile(file, html, 'utf-8');
+    return file;
+  } catch {
+    return undefined;
+  }
+}
+
+function urlSafeProbeSlug(url: string): string {
+  try {
+    const u = new URL(url);
+    const parts = u.pathname.split('/').filter(Boolean);
+    return parts[parts.length - 1] ?? u.hostname.replace(/\./g, '_');
+  } catch {
+    return 'probe';
+  }
 }
 
 function errorHint(code?: string): string {

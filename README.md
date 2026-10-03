@@ -68,11 +68,24 @@ override (e.g. `docker run --rm <image> https://example.com/article`).
 > Then confirm which build is actually running:
 >
 > ```bash
-> docker compose --profile cli run --rm webcopy --doctor
+> docker compose --profile cli run --rm cli --doctor
 > ```
 >
 > `--doctor` lists each adapter's capabilities. If `juejin` does not report
 > `ssr-payload+dom`, the running build is stale.
+>
+> With a URL it also probes the live fetch path and reports page-level
+> diagnostics (HTTP status, SSR-payload markers, per-layer extraction sizes):
+>
+> ```bash
+> docker compose --profile cli run --rm cli \
+>   --doctor --dump-html /app/output \
+>   https://juejin.cn/post/7668296872551792640
+> ```
+>
+> `RESULT: ok` means the extraction pipeline works. `FAILED [no-article]`
+> comes with a hint naming the layer that failed; `--dump-html` saves the raw
+> page into the `webcopy-output` volume for offline inspection.
 
 ```bash
 # Web UI → http://localhost:3000
@@ -81,10 +94,10 @@ override (e.g. `docker run --rm <image> https://example.com/article`).
 docker compose --profile web up -d
 
 # CLI one-shot (URLs passed at run time)
-docker compose --profile cli run --rm webcopy https://example.com/article
+docker compose --profile cli run --rm cli https://example.com/article
 
 # Multiple URLs + image localization
-docker compose --profile cli run --rm webcopy \
+docker compose --profile cli run --rm cli \
   --localize-images --image-concurrency 8 \
   https://a.com https://b.com
 
@@ -170,6 +183,17 @@ webcopy https://slow.example.com/article --timeout 30000 --retries 5
 | `--host <host>` | `127.0.0.1` | Web server bind address |
 | `--port <port>` | `3000` | Web server port |
 | `--doctor` | `false` | Print build info and adapter capabilities, then exit |
+| `--dump-html [dir]` | — | With `--doctor <url>`: save the raw fetched HTML into `dir` for inspection |
+
+### Degraded-page handling
+
+Some sites (Juejin notably) intermittently serve a bot-degraded response — a
+challenge page or a client-rendered shell without the article data. When an
+adapter detects this, the pipeline automatically retries once with a full set
+of real-browser headers (Chrome UA, `sec-fetch-*`, `sec-ch-ua`). If the retry
+also fails, you get a `no-article` error instead of a file containing only a
+loading placeholder. Use `--doctor <url> --dump-html <dir>` to see which layer
+failed and to capture the raw page.
 
 ## Output format
 

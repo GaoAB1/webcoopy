@@ -16,6 +16,13 @@ export interface AdapterResult {
   byline?: string;
   /** Optional site name override. */
   siteName?: string;
+  /**
+   * Extraction found nothing usable AND the page looks like a bot-degraded
+   * response (missing SSR payload / challenge shell). The pipeline refetches
+   * once with full browser headers (`browserMode`) and runs the adapter again
+   * before falling back to Readability.
+   */
+  retryWithBrowser?: boolean;
 }
 
 /**

@@ -130,6 +130,55 @@ describe('processUrl (mocked fetch)', () => {
     expect(await readdir(dir)).toHaveLength(0);
   });
 
+  it('refetches with browser headers when the adapter flags a degraded page', async () => {
+    // First response: a degraded SPA shell without the SSR payload (what
+    // Juejin serves when it does not like the client). Second response, after
+    // the browser-mode retry: the real SSR payload with the article.
+    const SHELL_HTML = '<html><head><title>degraded - 掘金</title></head><body><div id="__nuxt"></div></body></html>';
+    const PAYLOAD_HTML =
+      '<html><head><title>浏览器重试标题 - 掘金</title></head><body>' +
+      '<script>window.__NUXT__=(function(a){return {article:{article_info:{mark_content:"浏览器重试正文内容。"}}};})(0);</script>' +
+      '</body></html>';
+
+    const calls: Array<{ url: string; headers: Record<string, string> }> = [];
+    globalThis.fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(url), headers: (init?.headers ?? {}) as Record<string, string> });
+      const body = calls.length === 1 ? SHELL_HTML : PAYLOAD_HTML;
+      return new Response(body, { status: 200, headers: { 'Content-Type': 'text/html' } });
+    }) as unknown as typeof fetch;
+
+    const r = await processUrl('https://juejin.cn/post/999', { outDir: dir, overwrite: true });
+
+    expect(r.ok).toBe(true);
+    expect(r.adapter).toBe('juejin');
+    expect(calls).toHaveLength(2);
+    // First attempt uses the lightweight bot profile, the retry navigates
+    // with a full browser header set.
+    expect(calls[0].headers['sec-fetch-mode']).toBeUndefined();
+    expect(calls[1].headers['sec-fetch-mode']).toBe('navigate');
+
+    const content = await readFile(r.path!, 'utf-8');
+    expect(content).toContain('浏览器重试正文内容。');
+    expect(content).toContain('title: "浏览器重试标题"');
+  });
+
+  it('gives up with no-article when the browser-mode refetch also yields nothing', async () => {
+    const SHELL_HTML = '<html><head><title>degraded - 掘金</title></head><body><div id="__nuxt"></div></body></html>';
+    let calls = 0;
+    globalThis.fetch = vi.fn(async () => {
+      calls++;
+      return new Response(SHELL_HTML, { status: 200, headers: { 'Content-Type': 'text/html' } });
+    }) as unknown as typeof fetch;
+
+    const r = await processUrl('https://juejin.cn/post/999', { outDir: dir, overwrite: true });
+
+    expect(r.ok).toBe(false);
+    expect(r.errorCode).toBe('no-article');
+    // One plain attempt + one browser-mode retry.
+    expect(calls).toBe(2);
+    expect(await readdir(dir)).toHaveLength(0);
+  });
+
   it('returns ok=false with errorCode=timeout when the request times out', async () => {
     globalThis.fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       await new Promise((_, rej) => {

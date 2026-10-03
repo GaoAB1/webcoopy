@@ -45,6 +45,15 @@ export interface FetcherOptions {
   headers?: Record<string, string>;
   /** Maximum content length in bytes; default: 10MB. Larger responses are truncated. */
   maxBytes?: number;
+  /**
+   * Send a full set of real-browser headers (Chrome UA, sec-ch-ua,
+   * sec-fetch-*, zh-CN-first Accept-Language). Anti-bot layers on some sites
+   * (ByteDance properties notably) degrade the response for requests that
+   * look like unknown bots; this mode looks like a normal navigation.
+   * Per-request `headers` and `userAgent` still win when provided.
+   * Default: false.
+   */
+  browserMode?: boolean;
 }
 
 const DEFAULT_UA =
@@ -71,7 +80,8 @@ export async function fetchHtml(
         timeoutMs: options.timeoutMs,
         userAgent: options.userAgent,
         headers: options.headers,
-        maxBytes: options.maxBytes
+        maxBytes: options.maxBytes,
+        browserMode: options.browserMode
       });
       return result;
     } catch (err) {
@@ -108,6 +118,30 @@ interface FetchOnceOptions {
   userAgent?: string;
   headers?: Record<string, string>;
   maxBytes?: number;
+  browserMode?: boolean;
+}
+
+/** Realistic Chrome navigation headers used by `browserMode`. */
+const BROWSER_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+
+function browserHeaders(): Record<string, string> {
+  return {
+    'User-Agent': BROWSER_UA,
+    'Accept':
+      'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+    'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+    'Cache-Control': 'no-cache',
+    Pragma: 'no-cache',
+    'sec-ch-ua': '"Chromium";v="131", "Not_A Brand";v="24", "Google Chrome";v="131"',
+    'sec-ch-ua-mobile': '?0',
+    'sec-ch-ua-platform': '"Windows"',
+    'sec-fetch-dest': 'document',
+    'sec-fetch-mode': 'navigate',
+    'sec-fetch-site': 'none',
+    'sec-fetch-user': '?1',
+    'Upgrade-Insecure-Requests': '1'
+  };
 }
 
 async function fetchOnce(url: string, opts: FetchOnceOptions): Promise<FetchResult> {
@@ -116,15 +150,23 @@ async function fetchOnce(url: string, opts: FetchOnceOptions): Promise<FetchResu
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
+  const baseHeaders = opts.browserMode
+    ? browserHeaders()
+    : {
+        'User-Agent': DEFAULT_UA,
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.8,zh-CN;q=0.7,zh;q=0.6'
+      };
+
   try {
     const res = await fetch(url, {
       method: 'GET',
       redirect: 'follow',
       signal: controller.signal,
       headers: {
-        'User-Agent': opts.userAgent ?? DEFAULT_UA,
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.8,zh-CN;q=0.7,zh;q=0.6',
+        ...baseHeaders,
+        // Explicit per-call options win over the profile defaults.
+        ...(opts.userAgent ? { 'User-Agent': opts.userAgent } : {}),
         ...(opts.headers ?? {})
       }
     });

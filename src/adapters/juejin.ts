@@ -40,7 +40,13 @@ export const juejinAdapter: ArticleAdapter = {
       };
     }
 
-    return extractFromDom(html);
+    const domResult = extractFromDom(html);
+    if (domResult.html !== undefined) return domResult;
+
+    // Both paths failed. Juejin intermittently serves a bot-degraded response
+    // (challenge page or CSR shell without the SSR payload). Ask the pipeline
+    // to retry once with full browser headers before giving up.
+    return { html: undefined, retryWithBrowser: true };
   }
 };
 

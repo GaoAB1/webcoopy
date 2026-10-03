@@ -385,3 +385,27 @@ describe('juejinAdapter — Nuxt SSR payload', () => {
     expect(r.html).toBeUndefined();
   });
 });
+
+describe('juejinAdapter — degraded-page signal', () => {
+  it('flags retryWithBrowser when both payload and DOM extraction fail', async () => {
+    // An SPA shell with neither the SSR payload nor a rendered article —
+    // the shape juejin serves when it degrades a request.
+    const html = '<html><head><title>x - 掘金</title></head><body><div id="__nuxt"></div></body></html>';
+    const r = await juejinAdapter.extract('https://juejin.cn/post/1', html, '');
+
+    expect(r.markdown).toBeUndefined();
+    expect(r.html).toBeUndefined();
+    expect(r.retryWithBrowser).toBe(true);
+  });
+
+  it('does not flag retryWithBrowser when the DOM path succeeds', async () => {
+    const long = '<p>这是一段足够长的正文段落内容，用于通过适配器的最小长度校验。</p>'.repeat(5);
+    const html = `<html><head><title>DOM 文章 - 掘金</title></head><body>
+<div class="article-content">${long}</div>
+</body></html>`;
+    const r = await juejinAdapter.extract('https://juejin.cn/post/1', html, '');
+
+    expect(r.html).toBeDefined();
+    expect(r.retryWithBrowser).toBeUndefined();
+  });
+});

@@ -92,9 +92,38 @@ export async function processUrl(url: string, options: PipelineOptions): Promise
     // 2. Try adapter extraction if an adapter matched.
     if (primaryAdapter) {
       log(`extracting via adapter [${primaryAdapter.name}]…`);
-      const result = await primaryAdapter.extract(url, html, finalUrl);
+      let result = await primaryAdapter.extract(url, html, finalUrl);
+      let effectiveHtml = html;
+      let effectiveUrl = finalUrl;
+
+      // Second chance: some sites (Juejin notably) intermittently serve a
+      // bot-degraded response — a challenge page or a CSR shell without the
+      // SSR payload — where a plain request gets no article data. Retry once
+      // with full browser headers before giving up on the adapter.
+      if (
+        result.retryWithBrowser &&
+        result.markdown === undefined &&
+        result.html === undefined &&
+        !options.fetch?.browserMode
+      ) {
+        log(`adapter [${primaryAdapter.name}] got a degraded page — refetching with browser headers…`);
+        try {
+          const retry = await fetchHtml(fetchUrl, { ...options.fetch, browserMode: true });
+          const retryResult = await primaryAdapter.extract(url, retry.html, retry.url);
+          if (retryResult.markdown !== undefined || retryResult.html !== undefined) {
+            result = retryResult;
+            effectiveHtml = retry.html;
+            effectiveUrl = retry.url;
+          } else {
+            log(`adapter [${primaryAdapter.name}] still empty after browser-mode refetch`);
+          }
+        } catch (retryErr) {
+          log(`browser-mode refetch failed: ${retryErr instanceof Error ? retryErr.message : String(retryErr)}`);
+        }
+      }
+
       if (result.markdown !== undefined || result.html !== undefined) {
-        const body = result.markdown ?? htmlToMarkdown(result.html ?? html, { pageUrl: finalUrl });
+        const body = result.markdown ?? htmlToMarkdown(result.html ?? effectiveHtml, { pageUrl: effectiveUrl });
         const meta: ArticleMeta = {
           title: result.title || slug,
           author: result.byline || undefined,
