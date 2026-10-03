@@ -17,7 +17,7 @@ CLI-first tool. Design doc: [`DESIGN.md`](./DESIGN.md).
 - **Batch mode** — pass multiple URLs or a file of URLs.
 - **Zero-config CLI** — `npm install && npx webcopy <url>` and go.
 - **Web UI** — drag-and-drop URLs in your browser; paste, convert, and download Markdown with one click.
-- **Docker** — multi-stage image, runs anywhere with `docker run`.
+- **Docker** — multi-stage image, runs anywhere with `docker run` or `docker compose`.
 
 ## Install
 
@@ -50,6 +50,39 @@ docker run --rm -v "$PWD/output:/app/output" webcopy \
 The image is multi-stage (Node 20 build → `node:20-alpine` runtime) and ships
 with `ca-certificates` + `dumb-init` for clean SIGTERM handling. Default entry
 is `node /app/dist/index.js`, so all CLI flags pass through unchanged.
+
+### docker-compose
+
+```bash
+# Web UI → http://localhost:3000
+docker compose up
+
+# CLI one-shot (URLs passed at run time)
+docker compose --profile cli run --rm webcopy https://example.com/article
+
+# Multiple URLs + image localization
+docker compose --profile cli run --rm webcopy \
+  --localize-images --image-concurrency 8 \
+  https://a.com https://b.com
+
+# Local dev (source-code volume mount, live edits)
+docker compose --profile dev up
+```
+
+Custom port via environment variable:
+
+```bash
+WEB_PORT=8080 docker compose up       # Web UI on port 8080
+DEV_PORT=3001 docker compose --profile dev up
+```
+
+All profiles share a named volume `webcopy-output` so Markdown files persist
+across container restarts. Inspect with:
+
+```bash
+docker compose exec web sh -c 'ls /app/output'
+docker compose down -v               # stop + delete volumes
+```
 
 ### Web UI
 

@@ -1,0 +1,72 @@
+# ── webcopy docker-compose ────────────────────────────────────────────────────
+# Profiles:
+#   (default / web)  — start the Web UI on http://localhost:3000
+#   cli              — single-shot CLI: pass URLs as command args
+#   dev              — local dev with source-code volume mount (live reload)
+#
+# Examples:
+#   docker compose up                          # Web UI → http://localhost:3000
+#   docker compose --profile cli run --rm webcopy https://example.com/article
+#   docker compose --profile dev up            # Dev mode with hot-reload
+#   docker compose down                        # stop everything
+
+services:
+  # ── Web UI server ───────────────────────────────────────────────────────────
+  web:
+    build: .
+    image: ghcr.io/gaoab1/webcopy:latest
+    profiles: ["web"]
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    environment:
+      - NODE_ENV=production
+    volumes:
+      - webcopy-output:/app/output
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3000/api/health', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # ── CLI one-shot ──────────────────────────────────────────────────────────────
+  cli:
+    build: .
+    image: ghcr.io/gaoab1/webcopy:latest
+    profiles: ["cli"]
+    volumes:
+      - webcopy-output:/app/output
+    # Override command at invocation time:
+    #   docker compose --profile cli run --rm webcopy --out /app/output https://example.com/article
+    command: ["--help"]
+    restart: "no"
+
+  # ── Local development (hot-reload via volume) ─────────────────────────────────
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: build
+    image: webcopy-dev:latest
+    profiles: ["dev"]
+    ports:
+      - "${DEV_PORT:-3000}:3000"
+    volumes:
+      # Mount source so edits are reflected immediately.
+      - .:/app:delegated
+      - dev-node-modules:/app/node_modules
+    environment:
+      - NODE_ENV=development
+    # Dev container runs the Web UI with auto-reload via tsup --watch.
+    # For a true live-reload loop, replace CMD with:
+    #   node /app/node_modules/.bin/tsup --watch src/index.ts --out-dir dist &&
+    #   node --watch /app/dist/index.js --web --host 0.0.0.0 --port 3000
+    command: ["--web", "--host", "0.0.0.0", "--port", "3000"]
+    restart: "no"
+
+volumes:
+  webcopy-output:
+    name: webcopy-output
+  dev-node-modules:
+    name: webcopy-dev-node-modules
