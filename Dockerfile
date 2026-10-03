@@ -7,7 +7,11 @@ FROM node:20-bookworm-slim AS build
 WORKDIR /app
 
 # Install deps first for layer caching.
-COPY package.json package-lock.json ./
+# NOTE: package-lock.json is NOT copied here — npm has a bug where
+# platform-specific optional deps (e.g. @rollup/rollup-linux-x64-gnu)
+# are not resolved from a lock file generated on a different OS.
+# See https://github.com/npm/cli/issues/4828
+COPY package.json ./
 RUN npm install
 
 # Copy sources and build.
@@ -27,7 +31,7 @@ RUN apk add --no-cache ca-certificates dumb-init \
 WORKDIR /app
 
 # Prod deps only (commander, iconv-lite, jsdom, cheerio, turndown, …).
-COPY package.json package-lock.json ./
+COPY package.json ./
 RUN npm install --omit=dev && npm cache clean --force
 
 # Bundled CLI + its entrypoint metadata.
